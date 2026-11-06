@@ -1,0 +1,47 @@
+services:
+  gateway:
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      NORTH_URL: http://north-insurance:4000
+      SOUTH_URL: http://south-insurance:4000
+      EAST_URL: http://east-insurance:4000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: resilient-api-gateway
+    depends_on: [north-insurance, south-insurance, east-insurance, jaeger]
+
+  north-insurance: &mock
+    image: node:22-alpine
+    working_dir: /app
+    volumes: ["./mocks:/app:ro"]
+    command: node server.mjs
+    environment: { PROVIDER: north }
+
+  south-insurance:
+    <<: *mock
+    environment: { PROVIDER: south }
+
+  # Deliberately flaky: ~40% of calls answer 503. Tune FAILURE_RATE to watch the breaker open.
+  east-insurance:
+    <<: *mock
+    environment: { PROVIDER: east, FAILURE_RATE: "0.4" }
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    ports: ["9090:9090"]
+    volumes: ["./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    ports: ["3001:3000"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.9.0
+    ports: ["16686:16686"]
